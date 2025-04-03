@@ -1,12 +1,24 @@
 {
+  "name": "wpp-bot",
+  "version": "1.0.0",
+  "description": "Bot de WhatsApp para Lukao Lanches",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "clean": "rm -rf ./tokens && rm -rf /tmp/whatsapp-session",
+    "dev": "nodemon server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "dependencies": {
-    "@google-cloud/firestore": "^7.11.0",
     "@wppconnect-team/wppconnect": "^1.36.4",
     "cors": "^2.8.5",
     "express": "^5.1.0",
-    "firebase-admin": "^13.2.0",
-    "path-to-regexp": "^6.2.1",
+    "chromium": "^3.0.3",
     "puppeteer-core": "^24.5.0",
-    "chromium": "^3.0.3"
+    "fs-extra": "^11.2.0"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
   }
 }
