@@ -1,6 +1,7 @@
 const express = require('express');
 const { create } = require('@wppconnect-team/wppconnect');
 const cors = require('cors');
+const chromium = require('chromium'); // Adicionado
 
 const app = express();
 app.use(cors());
@@ -72,7 +73,7 @@ const initializeWhatsApp = async () => {
           '--single-process'
         ],
         headless: 'new',
-        executablePath: process.env.CHROME_PATH || undefined,
+        executablePath: chromium.path, // Alterado para usar o chromium do Render
         ignoreHTTPSErrors: true
       },
       disableWelcome: true,
@@ -240,8 +241,9 @@ app.post('/disconnect', async (req, res) => {
 });
 
 // Start server
-app.listen(3001, () => {
-  console.log('Server running on port 3001');
+const PORT = process.env.PORT || 3001; // Alterado para usar a porta do ambiente
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
 
 // Proper shutdown

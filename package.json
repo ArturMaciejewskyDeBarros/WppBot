@@ -6,6 +6,7 @@
     "express": "^5.1.0",
     "firebase-admin": "^13.2.0",
     "path-to-regexp": "^6.2.1",
-    "puppeteer": "^24.5.0"
+    "puppeteer-core": "^24.5.0",
+    "chromium": "^3.0.3"
   }
 }
