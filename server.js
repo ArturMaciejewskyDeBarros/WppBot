@@ -1,23 +1,24 @@
 const express = require('express');
 const { create } = require('@wppconnect-team/wppconnect');
 const cors = require('cors');
-const chromium = require('chromium');
-const fs = require('fs');
-const path = require('path');
+const chromium = require('chromium'); // Adicionado
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Configurações
-const QR_EXPIRATION_TIME = 120000; // 2 minutos
+// QR Code expiration settings
+const QR_EXPIRATION_TIME = 120000; // 2 minutes in milliseconds
 let qrCodeTimestamp = null;
+
 let client = null;
 let qrCode = null;
 let isInitializing = false;
+
+// Object to store last message timestamps
 const lastMessageTimestamps = {};
 
-// Mensagem automática
+// Auto-reply message template
 const AUTO_REPLY_MESSAGE = `
 🍔 *Lukao Lanches* agradece seu contato!  
 
@@ -37,162 +38,219 @@ Se tiver qualquer dúvida, é só chamar! Estamos aqui para ajudar.
 *Equipe Lukao Lanches* ❤️  
 `;
 
-// Verificar se pode enviar mensagem
+// Check if can send message
 const canSendMessage = (contact) => {
   const now = Date.now();
   const lastSent = lastMessageTimestamps[contact];
-  return !lastSent || (now - lastSent) > 1800000; // 30 minutos
-};
-
-// Limpar sessão anterior
-const cleanSession = () => {
-  try {
-    const tempDir = '/tmp/whatsapp-session';
-    const tokenDir = path.join(__dirname, 'tokens');
-    
-    [tempDir, tokenDir].forEach(dir => {
-      if (fs.existsSync(dir)) {
-        fs.rmSync(dir, { recursive: true, force: true });
-        console.log(`Diretório limpo: ${dir}`);
-      }
-    });
-  } catch (error) {
-    console.error('Erro ao limpar sessão:', error);
+  
+  if (!lastSent || (now - lastSent) > 1800000) {
+    lastMessageTimestamps[contact] = now;
+    return true;
   }
+  
+  return false;
 };
 
-// Inicializar WhatsApp
+// Initialize WhatsApp client
 const initializeWhatsApp = async () => {
   if (isInitializing) return;
   isInitializing = true;
-  cleanSession(); // Limpar sessões anteriores
 
   try {
     console.log('Iniciando conexão com WhatsApp...');
     
-    const puppeteerOptions = {
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--single-process',
-        '--disable-extensions',
-        '--disable-features=site-per-process',
-        '--disable-notifications'
-      ],
-      headless: true,
-      executablePath: process.env.CHROMIUM_PATH || chromium.path,
-      ignoreHTTPSErrors: true,
-      userDataDir: '/tmp/whatsapp-session',
-      timeout: 60000
-    };
-
     client = await create({
       session: 'whatsapp-session',
-      puppeteerOptions,
-      disableWelcome: true,
-      updatesLog: true,
-      autoClose: 0,
-      tokenStore: 'file',
-      folderNameToken: './tokens',
-      catchQR: (base64Qr) => {
-        qrCode = base64Qr;
-        qrCodeTimestamp = Date.now();
-        console.log('Novo QR Code gerado');
+      puppeteerOptions: {
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--single-process'
+        ],
+        headless: 'new',
+        executablePath: chromium.path, // Alterado para usar o chromium do Render
+        ignoreHTTPSErrors: true
       },
-      statusFind: (status) => {
-        console.log('Status:', status);
+      disableWelcome: true,
+      autoClose: QR_EXPIRATION_TIME, // 2 minutes timeout
+      catchQR: (base64Qr) => {
+        // Only update if no QR or previous one expired
+        if (!qrCode || (Date.now() - qrCodeTimestamp > QR_EXPIRATION_TIME)) {
+          qrCode = base64Qr;
+          qrCodeTimestamp = Date.now();
+          console.log('Novo QR Code gerado (válido por 2 minutos)');
+        }
+      },
+      statusFind: (statusSession, session) => {
+        console.log('Status Session: ', statusSession);
+        console.log('Session name: ', session);
       },
       browserWS: ''
     });
 
-    console.log('Cliente WhatsApp inicializado');
+    console.log('Cliente WhatsApp criado com sucesso');
 
-    // Eventos
+    // Client events
     client.onStateChange((state) => {
-      console.log('Estado alterado:', state);
+      console.log('State changed: ', state);
       if (state === 'CONNECTED') {
         qrCode = null;
         qrCodeTimestamp = null;
       }
     });
 
-    client.onMessage(async (msg) => {
+    client.onStreamChange((state) => {
+      console.log('Stream state changed: ', state);
+    });
+
+    client.onMessage(async (message) => {
       try {
-        if (!msg.isGroupMsg && !msg.fromMe) {
-          console.log('Mensagem de:', msg.from, 'Texto:', msg.body);
+        if (!message.isGroupMsg && !message.fromMe) {
+          console.log('\n--- Nova mensagem recebida ---');
+          console.log('De:', message.from);
+          console.log('Texto:', message.body);
           
-          const contact = msg.from.split('@')[0];
-          if (canSendMessage(contact)) {
-            await client.sendText(msg.from, AUTO_REPLY_MESSAGE);
-            lastMessageTimestamps[contact] = Date.now();
-            console.log('Resposta enviada para', contact);
+          if (canSendMessage(message.from)) {
+            await client.sendText(message.from, AUTO_REPLY_MESSAGE);
+            console.log('Resposta automática enviada com sucesso');
+          } else {
+            console.log('Mensagem automática não enviada - intervalo mínimo não atingido');
           }
         }
       } catch (error) {
-        console.error('Erro ao responder:', error);
+        console.error('Erro ao responder mensagem:', error);
       }
     });
 
     client.on('ready', () => {
       console.log('=== CLIENTE PRONTO ===');
       isInitializing = false;
+      qrCode = null;
+      qrCodeTimestamp = null;
+    });
+
+    client.on('authenticated', () => {
+      console.log('=== AUTENTICADO ===');
+      isInitializing = false;
+    });
+
+    client.on('auth_failure', (msg) => {
+      console.error('!!! FALHA NA AUTENTICAÇÃO:', msg);
+      isInitializing = false;
     });
 
     client.on('disconnected', (reason) => {
       console.log('!!! DESCONECTADO:', reason);
       isInitializing = false;
+      qrCode = null;
+      qrCodeTimestamp = null;
       setTimeout(initializeWhatsApp, 10000);
     });
 
+    client.on('change_state', (state) => {
+      console.log('Status da conexão alterado:', state);
+    });
+
   } catch (error) {
-    console.error('!!! ERRO NA INICIALIZAÇÃO:', error);
+    console.error('!!! ERRO NA INICIALIZAÇÃO:', error.message);
     isInitializing = false;
+    qrCode = null;
+    qrCodeTimestamp = null;
     setTimeout(initializeWhatsApp, 30000);
   }
 };
 
-// Endpoints
-app.get('/qr', (req, res) => {
-  if (!qrCode) return res.status(404).json({ error: 'QR Code não gerado' });
-  if (Date.now() - qrCodeTimestamp > QR_EXPIRATION_TIME) {
-    return res.status(410).json({ error: 'QR Code expirado' });
-  }
-  res.json({ qr: qrCode, status: 'waiting_qr', expiresIn: Math.max(0, QR_EXPIRATION_TIME - (Date.now() - qrCodeTimestamp)) });
-});
+// Start connection
+initializeWhatsApp();
 
-app.get('/status', (req, res) => {
+// QR Code endpoint
+app.get('/qr', (req, res) => {
+  if (!qrCode) {
+    return res.status(404).json({ error: 'QR Code not generated yet' });
+  }
+  
+  // Check if QR Code is still valid
+  if (Date.now() - qrCodeTimestamp > QR_EXPIRATION_TIME) {
+    return res.status(410).json({ error: 'QR Code expired' });
+  }
+  
   res.json({ 
-    status: client?.isConnected() ? 'connected' : 'disconnected',
-    isAuthenticated: client?.isConnected() || false
+    qr: qrCode,
+    status: 'waiting_qr',
+    expiresIn: Math.max(0, QR_EXPIRATION_TIME - (Date.now() - qrCodeTimestamp))
   });
 });
 
-app.post('/clean-session', (req, res) => {
+// Status endpoint
+app.get('/status', (req, res) => {
+  if (!client) {
+    return res.json({ 
+      status: 'disconnected',
+      qr: null
+    });
+  }
+  
   try {
-    cleanSession();
-    if (client) client.close();
-    client = null;
-    qrCode = null;
-    initializeWhatsApp();
+    const status = client.isConnected() ? 'connected' : 'disconnected';
+    res.json({ 
+      status,
+      isAuthenticated: client.isConnected()
+    });
+  } catch (error) {
+    console.error('Error checking status:', error);
+    res.status(500).json({ 
+      status: 'error',
+      error: 'Error checking status'
+    });
+  }
+});
+
+// Send message endpoint
+app.post('/send-message', async (req, res) => {
+  if (!client || !client.isConnected()) {
+    return res.status(500).json({ error: 'WhatsApp client not initialized or disconnected' });
+  }
+
+  const { number, message } = req.body;
+  try {
+    await client.sendText(`${number}@c.us`, message);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Iniciar
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-  initializeWhatsApp();
+// Disconnect endpoint
+app.post('/disconnect', async (req, res) => {
+  try {
+    if (client) {
+      await client.close();
+      client = null;
+      qrCode = null;
+      qrCodeTimestamp = null;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
+// Start server
+const PORT = process.env.PORT || 3001; // Alterado para usar a porta do ambiente
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+// Proper shutdown
 process.on('SIGINT', async () => {
-  if (client) await client.close();
+  console.log('\nEncerrando servidor...');
+  if (client) {
+    await client.close();
+  }
   process.exit();
 });
